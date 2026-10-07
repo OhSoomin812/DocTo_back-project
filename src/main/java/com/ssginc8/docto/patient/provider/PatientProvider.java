@@ -15,6 +15,14 @@ public class PatientProvider {
 
 	private final PatientRepo patientRepo;
 
+	/**
+	 * 예약 생성·변경 시 사용. 같은 환자에 대한 동시 요청이 중복 검사를 동시에 통과하지 못하도록 행 잠금으로 조회
+	 */
+	public Patient getActivePatientForUpdate(Long id) {
+		return patientRepo.findActiveByIdForUpdate(id)
+			.orElseThrow(PatientNotFoundException::new);
+	}
+
 	@Transactional(readOnly = true)
 	public Patient getActivePatient(Long id) {
 		return patientRepo.findByPatientIdAndDeletedAtIsNull(id)

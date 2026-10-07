@@ -28,6 +28,7 @@ import com.ssginc8.docto.doctor.entity.DoctorSchedule;
 import com.ssginc8.docto.doctor.provider.DoctorProvider;
 import com.ssginc8.docto.appointment.validator.AppointmentValidator;
 import com.ssginc8.docto.doctor.provider.DoctorScheduleProvider;
+import com.ssginc8.docto.global.error.exception.appointmentException.AppointmentAccessDeniedException;
 import com.ssginc8.docto.global.error.exception.appointmentException.IsSuspendedUserException;
 import com.ssginc8.docto.global.error.exception.appointmentException.NotCanceledException;
 import com.ssginc8.docto.global.error.exception.appointmentException.RoleNotFoundException;
@@ -158,13 +159,15 @@ public class AppointmentServiceImpl implements AppointmentService {
 	@Override
 	public void requestAppointment(AppointmentRequest request) {
 		// 1. 보호자 (user)와 환자 (patient) 조회
-		User guardian = userProvider.getUserById(request.getUserId());
+		// 보호자는 요청 본문의 userId가 아니라 로그인 사용자로 확정 (타인 명의 예약 방지)
+		User guardian = userService.getUserFromUuid();
 
 		if (guardian.getIsSuspended()) {
 			throw new IsSuspendedUserException();
 		}
 
-		Patient patient = patientProvider.getActivePatient(request.getPatientId());
+		// 같은 환자에 대한 동시 요청은 여기서 순서대로 처리됨 → 중복 검사가 앞 요청의 커밋 결과를 보고 판단
+		Patient patient = patientProvider.getActivePatientForUpdate(request.getPatientId());
 
 		// 2. 보호자-환자 관계 유효성 검사
 		PatientGuardian patientGuardian = patientGuardianProvider.validateAndGetPatientGuardian(guardian, patient);
@@ -222,9 +225,17 @@ public class AppointmentServiceImpl implements AppointmentService {
 	@Override
 	public AppointmentResponse updateAppointmentStatus(Long appointmentId, String statusStr) {
 		Appointment appointment = appointmentProvider.getAppointmentById(appointmentId);
+		validateAppointmentOwner(appointment);
 		String qaContent = qaPostProvider.getQaPostByAppointment(appointment);
 
 		AppointmentStatus newStatus = AppointmentStatus.from(statusStr);
+
+		// 확정 시점에 슬롯 정원 검사 (정원은 CONFIRMED 기준이므로 확정할 때 막아야 함)
+		if (newStatus == AppointmentStatus.CONFIRMED && appointment.getStatus() != AppointmentStatus.CONFIRMED) {
+			Doctor doctor = doctorProvider.getDoctorByIdForUpdate(appointment.getDoctor().getDoctorId());
+			appointmentValidator.validateDoctorSlotCapacity(doctor, appointment.getAppointmentTime());
+		}
+
 		appointment.changeStatus(newStatus);
 
 		appointmentProvider.save(appointment);
@@ -273,12 +284,32 @@ public class AppointmentServiceImpl implements AppointmentService {
 	}
 
 	/**
+	 * 예약 상태를 바꿀 수 있는 사용자인지 확인
+	 * - 병원 관리자: 자기 병원 예약만
+	 * - 보호자: 자신이 신청한 예약만
+	 */
+	private void validateAppointmentOwner(Appointment appointment) {
+		User loginUser = userService.getUserFromUuid();
+
+		boolean isOwner = switch (loginUser.getRole()) {
+			case HOSPITAL_ADMIN -> appointment.getHospital().getUser().getUserId().equals(loginUser.getUserId());
+			case GUARDIAN -> appointment.getPatientGuardian().getUser().getUserId().equals(loginUser.getUserId());
+			default -> false;
+		};
+
+		if (!isOwner) {
+			throw new AppointmentAccessDeniedException();
+		}
+	}
+
+	/**
 	 * 예약 취소
 	 */
 	@Transactional
 	public void cancelAppointment(Long appointmentId) {
 		// 1. 예약 조회
 		Appointment appointment = appointmentProvider.getAppointmentById(appointmentId);
+		validateAppointmentOwner(appointment);
 
 		// 2. 예약 취소 가능 상태인지 확인
 		if (appointment.getStatus() != AppointmentStatus.REQUESTED &&

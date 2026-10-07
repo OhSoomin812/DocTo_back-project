@@ -38,6 +38,12 @@ public class DoctorProvider {
 			.orElseThrow(DoctorNotFoundException::new);
 	}
 
+	// 호출하는 쪽 트랜잭션 안에서 잠금이 유지되어야 하므로 readOnly를 붙이지 않음
+	public Doctor getDoctorByIdForUpdate(Long doctorId) {
+		return doctorRepo.findByIdForUpdate(doctorId)
+			.orElseThrow(DoctorNotFoundException::new);
+	}
+
 	@Transactional(readOnly = true)
 	public Doctor getDoctorById(Long doctorId) {
 		return doctorRepo.findById(doctorId)
