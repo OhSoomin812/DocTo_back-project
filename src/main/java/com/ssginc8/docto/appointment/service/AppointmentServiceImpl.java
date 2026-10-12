@@ -259,11 +259,15 @@ public class AppointmentServiceImpl implements AppointmentService {
 			throw new IsSuspendedUserException();
 		}
 
+		// 예약 생성과 동일하게 환자 행을 잠가, 같은 환자의 동시 재예약이 중복 검사를 함께 통과하지 못하게 함
+		Patient patient = patientProvider.getActivePatientForUpdate(
+			original.getPatientGuardian().getPatient().getPatientId());
+
 		original.changeStatus(AppointmentStatus.CANCELED);
 		String qaContent = qaPostProvider.getQaPostByAppointment(original);
 
 		appointmentValidator.validateAppointmentTime(original.getDoctor(), original.getPatientGuardian(), newTime);
-		appointmentValidator.validateDuplicateAppointment(original.getPatientGuardian().getPatient(), newTime);
+		appointmentValidator.validateDuplicateAppointment(patient, newTime);
 		appointmentValidator.validateDoctorSlotCapacity(original.getDoctor(), newTime);
 
 		Appointment newAppointment = Appointment.create(
